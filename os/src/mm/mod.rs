@@ -17,8 +17,12 @@ use address::{StepByOne, VPNRange};
 pub use frame_allocator::{frame_alloc, FrameTracker};
 pub use memory_set::remap_test;
 pub use memory_set::{kernel_stack_position, MapPermission, MemorySet, KERNEL_SPACE};
-pub use page_table::{translated_byte_buffer, PageTableEntry};
+pub use page_table::{translated_byte_buffer,translated_struct_ptr,  PageTableEntry};
 use page_table::{PTEFlags, PageTable};
+
+pub use heap_allocator::heap_test;  // 公开 heap_test 函数
+pub use frame_allocator::frame_allocator_test;  // 公开 heap_test 函数
+
 
 /// initiate heap allocator, frame allocator and kernel space
 pub fn init() {
@@ -26,3 +30,4 @@ pub fn init() {
     frame_allocator::init_frame_allocator();
     KERNEL_SPACE.exclusive_access().activate();
 }
+

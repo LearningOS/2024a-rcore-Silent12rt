@@ -24,6 +24,9 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
+use crate::config::MAX_SYSCALL_NUM;
+use crate::timer::get_time_us;
+
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -153,6 +156,40 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// 新增
+    fn increase_sys_call(&self,sys_id:usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current_task=inner.current_task;
+        inner.tasks[current_task].sys_call_times[sys_id]+=1;
+    }
+
+    fn get_sys_call_times(&self) -> [u32;MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current_task=inner.current_task;
+        inner.tasks[current_task].sys_call_times.clone()
+    }
+
+    fn get_task_run_times(&self) -> usize {
+        // 调用get_time_us()获取当前时间
+        let current_time=get_time_us() / 1000;
+        let inner=self.inner.exclusive_access();
+        let current_task=inner.current_task;
+
+        // 当前时间-任务开始的时间戳得到任务的运行时间
+        current_time-inner.tasks[current_task].sys_call_begin
+    }
+
+    fn mmap(&self,start:usize,len:usize,port:usize) -> isize {
+        let mut inner=self.inner.exclusive_access();
+        let current_task=inner.current_task;
+        inner.tasks[current_task].memory_set.mmap(start,len,port)
+    }
+    fn munmap(&self,start:usize,len:usize) -> isize {
+        let mut inner=self.inner.exclusive_access();
+        let current_task=inner.current_task;
+        inner.tasks[current_task].memory_set.unmmap(start,len)
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +238,29 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Increase the sys call count
+pub fn increase_sys_call(sys_id: usize) {
+    TASK_MANAGER.increase_sys_call(sys_id);
+}
+
+/// return the sys count array of the current task
+pub fn get_sys_call_times() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_sys_call_times()
+}
+
+/// return the sys count array of the current task
+pub fn get_task_run_times() -> usize {
+    TASK_MANAGER.get_task_run_times()
+}
+
+/// select_cur_task_to_mmap
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, port)
+}
+
+/// select_cur_task_to_mmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

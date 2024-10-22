@@ -37,6 +37,7 @@ lazy_static! {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    map_tree: BTreeMap<VirtPageNum, FrameTracker>,
 }
 
 impl MemorySet {
@@ -45,6 +46,7 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            map_tree: BTreeMap::new(),
         }
     }
     /// Get the page table token
@@ -262,9 +264,88 @@ impl MemorySet {
             false
         }
     }
+    /// mmap
+    pub fn mmap(&mut self,start:usize,len:usize,port:usize) -> isize {
+        let va_start:VirtAddr=start.into();     // start转换为虚拟地址
+        // 判断是否对齐
+        if !va_start.aligned() {
+            return -1;
+        }
+        let mut va_start:VirtPageNum=va_start.into();    // 虚拟地址转为为虚拟页号
+        let mut flags=PTEFlags::from_bits(port as u8).unwrap();     // 页标志位
+        
+        // 读，写，执行权限
+        if port & 0b0000_0001 != 0 {
+            flags |= PTEFlags::R;
+        }
+        if port & 0b0000_0010 != 0 {
+            flags |= PTEFlags::W;
+        }
+        if port & 0b0000_0100 != 0 {
+            flags |= PTEFlags::X;
+        }
+
+        // 用户有效标志位
+        flags |= PTEFlags::U;
+        flags |= PTEFlags::V;
+
+        // 结束虚拟页号
+        let va_end: VirtAddr=(start+len).into();
+        let va_end: VirtPageNum=va_end.ceil();
+
+
+        // 虚拟地址空间遍历
+        while va_start != va_end {
+            // 页表条目检查
+            if let Some(pte)=self.page_table.translate(va_start) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+            // 物理内存页分配映射
+            if let Some(ppn)=frame_alloc() {
+                self.page_table.map(va_start,ppn.ppn,flags);
+                self.map_tree.insert(va_start,ppn);
+            }
+            else {
+                return -1;
+            }
+            va_start.step();
+        }
+        0
+    }
+
+    /// unmap
+    pub fn unmmap(&mut self,start:usize,len:usize) -> isize {
+        let va_start:VirtAddr=start.into();
+        if !va_start.aligned() {
+            return -1;
+        }
+
+        let mut va_start:VirtPageNum=va_start.into();
+        let va_end:VirtAddr=(start+len).into();
+        let va_end:VirtPageNum=va_end.ceil();
+
+        while va_start!=va_end {
+            if let Some(pte)=self.page_table.translate(va_start) {
+                if !pte.is_valid() {
+                    return -1;
+                }
+            }
+            else {
+                return -1;
+            }
+            self.page_table.unmap(va_start);
+            self.map_tree.remove(&va_start);
+            va_start.step();
+        }
+        0
+    }
+
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
+    /// 虚拟页号范围,虚拟页号到帧跟踪器的映射,映射类型,映射权限
     vpn_range: VPNRange,
     data_frames: BTreeMap<VirtPageNum, FrameTracker>,
     map_type: MapType,
@@ -388,6 +469,7 @@ pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
 
 /// remap test in kernel space
 #[allow(unused)]
+/// The test pof remap
 pub fn remap_test() {
     let mut kernel_space = KERNEL_SPACE.exclusive_access();
     let mid_text: VirtAddr = ((stext as usize + etext as usize) / 2).into();

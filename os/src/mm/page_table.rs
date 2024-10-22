@@ -1,6 +1,6 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum,PhysAddr};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -170,4 +170,23 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Translate&Copy a *mut T array to a mutable u8 Vec through page table
+pub fn translated_struct_ptr<T>(token: usize,ptr:*mut T) -> &'static mut T {
+    // 从token中获取页表对象
+    let page_table=PageTable::from_token(token);
+    // 将ptr转换成整数类型的虚拟地址，并获取页内偏移量
+    let va=VirtAddr::from(ptr as usize);
+    let page_off=va.page_offset();
+
+    // 获取虚拟地址对应的虚拟页号
+    let vpn=va.floor();
+
+    // 通过页表，将虚拟页号vpn翻译成物理页号pnn,并转换为物理地址
+    let mut pa:PhysAddr=page_table.translate(vpn).unwrap().ppn().into();
+    pa.0+=page_off;
+
+    // 将物理地址转换为一个可变引用
+    pa.get_mut()
 }

@@ -23,6 +23,8 @@ pub fn init_heap() {
 }
 
 #[allow(unused)]
+/// Test heap allocation by allocating and deallocating memory.
+/// This function verifies that the heap allocator works correctly.
 pub fn heap_test() {
     use alloc::boxed::Box;
     use alloc::vec::Vec;

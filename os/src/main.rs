@@ -43,6 +43,7 @@ pub mod task;
 pub mod timer;
 pub mod trap;
 
+
 core::arch::global_asm!(include_str!("entry.asm"));
 core::arch::global_asm!(include_str!("link_app.S"));
 
@@ -100,6 +101,12 @@ pub fn rust_main() -> ! {
     clear_bss();
     kernel_log_info();
     mm::init();
+
+    // 新增
+    mm::heap_test();
+    mm::frame_allocator_test();
+    mm::remap_test();
+
     println!("[kernel] back to world!");
     mm::remap_test();
     trap::init();
