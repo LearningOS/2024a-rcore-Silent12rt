@@ -21,7 +21,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::loader::get_app_data_by_name;
+use crate::{config::MAX_SYSCALL_NUM, loader::get_app_data_by_name};
 use alloc::sync::Arc;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
@@ -115,3 +115,30 @@ lazy_static! {
 pub fn add_initproc() {
     add_task(INITPROC.clone());
 }
+
+///新增
+/// 增加系统调用次数
+pub fn increase_sys_call(sys_id:usize) {
+    current_task().unwrap().inner_exclusive_access().increase_sys_call(sys_id)
+}
+
+/// 返回当前任务的系统调用次数
+pub fn get_sys_call_times() -> [u32;MAX_SYSCALL_NUM] {
+    current_task().unwrap().inner_exclusive_access().get_sys_call_times()
+}
+
+/// 返回当前任务的执行时间
+pub fn get_task_run_times() -> usize {
+    current_task().unwrap().inner_exclusive_access().get_task_run_times()
+}
+
+/// 选择当前任务map
+pub fn mmap(start:usize,len:usize,port:usize) -> isize {
+    current_task().unwrap().inner_exclusive_access().mmap(start, len, port)
+}
+
+/// 选择当前任务取消map
+pub fn munmap(start:usize,len:usize) -> isize {
+    current_task().unwrap().inner_exclusive_access().munmap(start, len)
+}
+

@@ -6,9 +6,8 @@ use crate::{
     loader::get_app_data_by_name,
     mm::{translated_refmut, translated_str},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskStatus,
-    },
+        add_task, current_task, current_user_token, exit_current_and_run_next, get_sys_call_times, get_task_run_times, mmap, munmap, suspend_current_and_run_next, TaskControlBlock, TaskStatus
+    }, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -122,7 +121,14 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let us=get_time_us();
+    let ts=translated_refmut(current_user_token(), _ts);
+    
+    *ts=TimeVal {
+        sec:us / 1_000_000,
+        usec:us % 1_000_000,
+    };
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -133,16 +139,29 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
         "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let ti=translated_refmut(current_user_token(), _ti);
+
+    *ti=TaskInfo {
+        status:TaskStatus::Running,
+        syscall_times:get_sys_call_times(),
+        time:get_task_run_times(),
+    };
+    0
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+    if _len == 0 {
+        return -1;
+    }
+    if _port & !0x7 != 0 || _port & 0x7 == 0 {
+        return -1;
+    }
     trace!(
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    mmap(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
@@ -151,7 +170,7 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    munmap(_start, _len)
 }
 
 /// change data segment size
@@ -171,6 +190,31 @@ pub fn sys_spawn(_path: *const u8) -> isize {
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
+
+    // 获取当前任务
+    let current_task=current_task();
+    if current_task.is_none() {
+        return -1;
+    }
+
+    let current_task=current_task.unwrap();
+
+    let mut current_inner=current_task.inner_exclusive_access();
+
+    // 获取当前任务的内存空间标识，用于访问用户空间的数据
+    let token=current_inner.memory_set.token();
+
+    // 将指向路径字符串的 _path 指针转换为 Rust 字符串 path
+    let path=translated_str(token, _path);
+
+    if let Some(data)=get_app_data_by_name(path.as_str()) {
+        let child_block=Arc::new(TaskControlBlock::new(data));
+        let mut child_inner=child_block.inner_exclusive_access();
+        child_inner.parent=Some(Arc::downgrade(&current_task));
+        current_inner.children.push(child_block.clone());
+        add_task(child_block.clone());
+        return child_block.pid.0 as isize;
+    } 
     -1
 }
 
@@ -180,5 +224,11 @@ pub fn sys_set_priority(_prio: isize) -> isize {
         "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if _prio<2 {
+        return -1;
+    }
+    let current_task=current_task().unwrap();
+    let mut current_inner=current_task.inner_exclusive_access();
+    current_inner.priority=_prio as usize;
+    _prio
 }

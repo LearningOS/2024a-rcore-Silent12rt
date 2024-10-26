@@ -34,6 +34,7 @@ lazy_static! {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    map_tree: BTreeMap<VirtPageNum, FrameTracker>,
 }
 
 impl MemorySet {
@@ -42,6 +43,7 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            map_tree:BTreeMap::new(),
         }
     }
     /// Get the page table token
@@ -244,7 +246,7 @@ impl MemorySet {
             memory_set.push(new_area, None);
             // copy data from another space
             for vpn in area.vpn_range {
-                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let src_ppn: PhysPageNum = user_space.translate(vpn).unwrap().ppn();
                 let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
                 dst_ppn
                     .get_bytes_array()
@@ -300,6 +302,85 @@ impl MemorySet {
             false
         }
     }
+    /// mmap
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
+        //start转换为虚拟地址
+        let va_start: VirtAddr = start.into();
+        //判断是否对齐
+        if !va_start.aligned() {
+            // print!("unmap fail don't aligned");
+            return -1;
+        }
+        //虚拟地址转换为虚拟页号
+        let mut va_start: VirtPageNum = va_start.into();
+        let mut flags = PTEFlags::from_bits(port as u8).unwrap();
+        // 读、写、执行权限
+        if port & 0b0000_0001 != 0 {
+            flags |= PTEFlags::R;
+        }
+
+        if port & 0b0000_0010 != 0 {
+            flags |= PTEFlags::W;
+        }
+
+        if port & 0b0000_0100 != 0 {
+            flags |= PTEFlags::X;
+        }
+
+        //用户标志位
+        flags |= PTEFlags::U;
+        flags |= PTEFlags::V;
+        //结束虚拟页号
+        let va_end: VirtAddr = (start + len).into();
+        let va_end: VirtPageNum = va_end.ceil();
+        //遍历虚拟地址空间
+        while va_start != va_end {
+            if let Some(pte) = self.page_table.translate(va_start) {
+                if pte.is_valid() {
+                    // print!("unmap on no map vpn");
+                    return -1;
+                }
+            }
+            //物理内存分配映射
+            if let Some(ppn) = frame_alloc() {
+                self.page_table.map(va_start, ppn.ppn, flags);
+                self.map_tree.insert(va_start, ppn);
+            } else {
+                return -1;
+            }
+            va_start.step();
+        }
+        0
+    }
+
+    /// unmap
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        let va_start: VirtAddr = start.into();
+        if !va_start.aligned() {
+            // print!("unmap fail don't aligned");
+            return -1;
+        }
+        let mut va_start: VirtPageNum = va_start.into();
+
+        let va_end: VirtAddr = (start + len).into();
+        let va_end: VirtPageNum = va_end.ceil();
+
+        while va_start != va_end {
+            if let Some(pte) = self.page_table.translate(va_start) {
+                if !pte.is_valid() {
+                    // print!("unmap on no map vpn");
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+            self.page_table.unmap(va_start);
+            self.map_tree.remove(&va_start);
+            va_start.step();
+        }
+        0
+    }
+
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
