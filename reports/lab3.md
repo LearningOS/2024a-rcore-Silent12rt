@@ -20,8 +20,8 @@ stride 算法原理非常简单，但是有一个比较大的问题。例如两�
 	
 		impl PartialOrd for Stride {
 		    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-		        let diff = self.0.wrapping_sub(other.0);
-		        if diff < (u64::BigStride / 2) {
+		        let diff = self.stride-other.stride;
+		        if diff < BigStride / 2 {
 		            Some(Ordering::Less)
 		        } else {
 		            Some(Ordering::Greater)
