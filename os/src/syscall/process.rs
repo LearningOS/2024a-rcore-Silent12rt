@@ -9,7 +9,7 @@ use crate::{
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, get_sys_call_times,get_task_run_times,mmap,munmap,
-        TaskStatus,TaskControlBlock,
+        TaskStatus,
     },
     timer::get_time_us,
 };
@@ -188,33 +188,34 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     trace!(
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    let current_task = current_task();
-    if current_task.is_none() {
+
+    let token = current_user_token();
+    let path = translated_str(token, path);
+
+    let Some(current) = current_task() else {
         return -1;
-    }
+    };
+    // debug!("kernel: sys_spawn {} -> {}", current.getpid(), path);
 
-    let current_task = current_task.unwrap();
+    let new_task = current.fork();
+    let all_data = {
+        let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) else {
+            return -1;
+        };
+        app_inode.read_all()
+    };
+    // debug!("kernel: sys_spawn app size: {}", all_data.len());
 
-    let mut current_inner = current_task.inner_exclusive_access();
-
-    let token = current_inner.memory_set.token();
-    let path = translated_str(token, _path);
-    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
-        let all_data = app_inode.read_all();
-        let data = all_data.as_slice();
-        let child_block = Arc::new(TaskControlBlock::new(data));
-        let mut child_inner = child_block.inner_exclusive_access();
-        child_inner.parent = Some(Arc::downgrade(&current_task));
-        current_inner.children.push(child_block.clone());
-        add_task(child_block.clone());
-        return child_block.pid.0 as isize;
-    }
-    -1
+    let pid = new_task.getpid();
+    new_task.exec(all_data.as_slice());
+    add_task(new_task);
+    // info!("kernel: sys_spawn pid: {}, parent: {}", pid, current.pid.0);
+    pid as isize
 }
 
 // YOUR JOB: Set task priority.

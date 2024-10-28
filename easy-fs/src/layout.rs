@@ -391,18 +391,7 @@ impl DiskInode {
         }
         write_size
     }
-
-    pub fn decrease_refcont(&mut self) {
-        self.refcont -= 1;
-    }
-
-    pub fn increase_refcont(&mut self) {
-        self.refcont += 1;
-    }
-
-    pub fn can_remove(&self) -> bool {
-        self.refcont == 0
-    }
+    
     /// 获取文件类型
     /// return
     ///     1 :File
@@ -417,8 +406,8 @@ impl DiskInode {
 /// A directory entry
 #[repr(C)]
 pub struct DirEntry {
-    pub(crate) name: [u8; NAME_LENGTH_LIMIT + 1],
-    pub(crate) inode_id: u32,
+    name: [u8; NAME_LENGTH_LIMIT + 1],
+    inode_id: u32,
 }
 /// Size of a directory entry
 pub const DIRENT_SZ: usize = 32;

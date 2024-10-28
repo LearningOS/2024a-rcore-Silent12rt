@@ -76,120 +76,109 @@ impl Inode {
         })
     }
 
-    /// Find inode under a disk inode by name
-    fn find_inode_and_pop(&self, name: &str, disk_inode: &mut DiskInode) -> Option<u32> {
-        // assert it is a directory
-        assert!(disk_inode.is_dir());
-        let file_count = (disk_inode.size as usize) / DIRENT_SZ;
-        let mut dirent = DirEntry::empty();
-        for i in 0..file_count {
-            assert_eq!(
-                disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device),
-                DIRENT_SZ,
-            );
-            if dirent.name() == name {
-                // 先保存要删除的目录项指向的inode编号
-                let r = Some(dirent.inode_id);
-                if i == file_count - 1 {
-                    // 要删除的是最后一个
-                    disk_inode.size -= 1;
-                } else {
-                    // 读取最后一个记录
-                    disk_inode.read_at(
-                        DIRENT_SZ * (file_count - 1),
-                        dirent.as_bytes_mut(),
-                        &self.block_device,
-                    );
-                    // 覆盖要删除的位置
-                    disk_inode.write_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device);
-                    disk_inode.size -= 1;
-                }
-                return r;
-            }
-        }
-        None
-    }
-
-    /// add_link
-    pub fn add_link(&self, old_name: &str, new_name: &str) -> isize {
+    /// Link inode under current inode by name
+    pub fn link_file(&self, old_name: &str, new_name: &str) -> bool {
         let mut fs = self.fs.lock();
-        let inode_id = self.read_disk_inode(|disk_inode| self.find_inode_id(old_name, disk_inode));
-        if inode_id.is_none() {
-            return -1;
+        let op = |root_inode: &DiskInode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(new_name, root_inode)
+        };
+        if self.read_disk_inode(op).is_some() {
+            return false;
         }
-        let inode_id = inode_id.unwrap();
 
-        self.modify_disk_inode(|root_inode| {
+        let res = self.modify_disk_inode(|root_inode| {
+            let Some(old_inode_id) = self.find_inode_id(old_name, root_inode) else {
+                return false;
+            };
+            {
+                let (old_inode_block_id, old_inode_block_offset) = fs.get_disk_inode_pos(old_inode_id);
+                get_block_cache(old_inode_block_id as usize, self.block_device.clone())
+                    .lock()
+                    .modify(old_inode_block_offset, |old_inode: &mut DiskInode| {
+                        old_inode.refcont += 1;
+                    });
+            }
             // append file in the dirent
             let file_count = (root_inode.size as usize) / DIRENT_SZ;
             let new_size = (file_count + 1) * DIRENT_SZ;
             // increase size
             self.increase_size(new_size as u32, root_inode, &mut fs);
             // write dirent
-            let dirent = DirEntry::new(new_name, inode_id);
+            let dirent = DirEntry::new(new_name, old_inode_id);
             root_inode.write_at(
                 file_count * DIRENT_SZ,
                 dirent.as_bytes(),
                 &self.block_device,
             );
-        });
-
-        let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
-
-        let node = Arc::new(Self::new(
-            block_id,
-            block_offset,
-            self.fs.clone(),
-            self.block_device.clone(),
-        ));
-
-        node.modify_disk_inode(|disk_inode| {
-            // 增加引用计数
-            disk_inode.increase_refcont();
+            true
         });
         block_cache_sync_all();
-        0
+        res
     }
-
-    /// remove_link
-    pub fn remove_link(&self, name: &str) -> isize {
-        let mut fs = self.fs.lock();
-        let inode = self.modify_disk_inode(|disk_inode| self.find_inode_and_pop(name, disk_inode));
-
-        if inode.is_none() {
-            // 链接不存在
-            return -1;
-        }
-        // 要删除的目录项(硬链接)指向的inode编号
-        let inode_id = inode.unwrap();
-
-        // 获取这个inode的位置
-        let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
-
-        // 获取这个inode
-        let node = Arc::new(Self::new(
-            block_id,
-            block_offset,
-            self.fs.clone(),
-            self.block_device.clone(),
-        ));
-
-        node.modify_disk_inode(|disk_inode| {
-            // 减少引用计数
-            disk_inode.decrease_refcont();
-            if disk_inode.can_remove() {
-                // 删除文件
-                let size = disk_inode.size;
-                let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
-                assert!(data_blocks_dealloc.len() == DiskInode::total_blocks(size) as usize);
-                for data_block in data_blocks_dealloc.into_iter() {
-                    fs.dealloc_data(data_block);
+    /// unlink inode under current inode by name
+    pub fn unlink(&self, name: &str) -> bool {
+        let Some(exist) = self.find(name) else {
+            return false
+        };
+        let fs = self.fs.lock();
+        let nlink = self.modify_disk_inode(|root_inode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            let mut found_idx = -1;
+            for i in 0..file_count {
+                assert_eq!(
+                    root_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    found_idx = i as isize;
+                    break;
                 }
             }
+            if found_idx == -1 {
+                return None;
+            }
+            let inode_id = dirent.inode_id() as u32;
+            let (inode_block_id, inode_block_offset) = fs.get_disk_inode_pos(inode_id);
+            let nlink = get_block_cache(inode_block_id as usize, self.block_device.clone())
+                .lock()
+                .modify(inode_block_offset, |inode: &mut DiskInode| {
+                    inode.refcont -= 1;
+                    inode.refcont
+                });
+            // move the last dirent to the current position
+            if file_count > 1 {
+                let mut last_dirent = DirEntry::empty();
+                assert_eq!(
+                    root_inode.read_at(
+                        (file_count - 1) * DIRENT_SZ,
+                        last_dirent.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                root_inode.write_at(found_idx as usize * DIRENT_SZ, last_dirent.as_bytes(), &self.block_device);
+                root_inode.size -= DIRENT_SZ as u32;
+            }
+            Some(nlink)
         });
+        drop(fs);
 
-        block_cache_sync_all();
-        0
+        match nlink {
+            None => {
+                unreachable!("IMPOSSIBLE: file not found")
+            },
+            Some(0) => {
+                exist.clear();
+                true
+            },
+            Some(_) => true,
+        }
     }
     /// Increase the size of a disk inode
     fn increase_size(

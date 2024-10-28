@@ -70,14 +70,14 @@ pub fn list_apps() {
     println!("**************/");
 }
 
-/// linkat
-pub fn linkat(_old_name: &str, _new_name: &str) -> isize {
-    ROOT_INODE.add_link(_old_name, _new_name)
+/// Link a file
+pub fn link_file(old_name: &str, new_name: &str) -> bool {
+    ROOT_INODE.link_file(old_name, new_name)
 }
 
-/// unlinkat
-pub fn unlinkat(_name: &str) -> isize {
-    ROOT_INODE.remove_link(_name)
+/// Unlink a file
+pub fn unlink_file(name: &str) -> bool {
+    ROOT_INODE.unlink(name)
 }
 
 bitflags! {
