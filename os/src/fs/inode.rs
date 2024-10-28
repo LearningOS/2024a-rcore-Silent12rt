@@ -77,7 +77,7 @@ pub fn link_file(old_name: &str, new_name: &str) -> bool {
 
 /// Unlink a file
 pub fn unlink_file(name: &str) -> bool {
-    ROOT_INODE.unlink(name)
+    ROOT_INODE.unlink_file(name)
 }
 
 bitflags! {
