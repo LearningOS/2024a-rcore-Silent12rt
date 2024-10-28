@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{TRAP_CONTEXT_BASE,MAX_SYSCALL_NUM,BIG_STRIDE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -35,6 +35,11 @@ impl TaskControlBlock {
     pub fn get_user_token(&self) -> usize {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
+    }
+    /// update_stride
+    pub fn update_stride(&self) {
+        let mut var = self.inner_exclusive_access();
+        var.cur_stride += BIG_STRIDE / var.priority;
     }
 }
 
@@ -71,6 +76,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    
+    /// syscall time count
+    pub sys_call_times:[u32;MAX_SYSCALL_NUM],
+
+    /// begin time
+    pub sys_call_begin:usize,
+
+    /// 当前 stride
+    pub cur_stride:usize,
+
+    /// 优先级
+    pub priority:usize,
 }
 
 impl TaskControlBlockInner {
@@ -86,6 +103,33 @@ impl TaskControlBlockInner {
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
+    
+    ///新增
+    /// 增加系统调用次数
+    pub fn increase_sys_call(&mut self,sys_id:usize) {
+        self.sys_call_times[sys_id]+=1;
+    }
+
+    /// 返回当前任务的系统调用次数
+    pub fn get_sys_call_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        self.sys_call_times.clone()
+    }
+
+    /// 返回当前任务的执行时间
+    pub fn get_task_run_times(&self) -> usize {
+        self.sys_call_begin
+    }
+
+    /// mmap
+    pub fn mmap(&mut self,start:usize,len:usize,port:usize) -> isize {
+        self.memory_set.mmap(start, len, port)
+    }
+
+    /// munmap
+    pub fn munmap(&mut self,start:usize,len:usize) -> isize {
+        self.memory_set.munmap(start, len)
+    }
+
     pub fn alloc_fd(&mut self) -> usize {
         if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
             fd
@@ -135,6 +179,10 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    sys_call_times:[0;MAX_SYSCALL_NUM],
+                    sys_call_begin:0,
+                    cur_stride:0,
+                    priority:16,
                 })
             },
         };
@@ -216,6 +264,10 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    sys_call_times:parent_inner.sys_call_times.clone(),
+                    sys_call_begin:0,
+                    cur_stride:0,
+                    priority:parent_inner.priority,
                 })
             },
         });

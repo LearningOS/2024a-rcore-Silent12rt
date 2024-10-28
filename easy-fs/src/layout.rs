@@ -60,6 +60,7 @@ impl SuperBlock {
             inode_area_blocks,
             data_bitmap_blocks,
             data_area_blocks,
+
         }
     }
     /// Check if a super block is valid using efs magic
@@ -86,6 +87,7 @@ pub struct DiskInode {
     pub indirect1: u32,
     pub indirect2: u32,
     type_: DiskInodeType,
+    pub refcont: u32, // 新增这个变量后需要将 INODE_DIRECT_COUNT - 1
 }
 
 impl DiskInode {
@@ -97,6 +99,7 @@ impl DiskInode {
         self.indirect1 = 0;
         self.indirect2 = 0;
         self.type_ = type_;
+        self.refcont = 1; // 初始化引用计数为1
     }
     /// Whether this inode is a directory
     pub fn is_dir(&self) -> bool {
@@ -348,6 +351,7 @@ impl DiskInode {
         }
         read_size
     }
+
     /// Write data into current disk inode
     /// size must be adjusted properly beforehand
     pub fn write_at(
@@ -387,12 +391,34 @@ impl DiskInode {
         }
         write_size
     }
+
+    pub fn decrease_refcont(&mut self) {
+        self.refcont -= 1;
+    }
+
+    pub fn increase_refcont(&mut self) {
+        self.refcont += 1;
+    }
+
+    pub fn can_remove(&self) -> bool {
+        self.refcont == 0
+    }
+    /// 获取文件类型
+    /// return
+    ///     1 :File
+    ///     2 :Directory
+    pub fn get_statmode(&self) -> usize {
+        match self.type_ {
+            DiskInodeType::File => 1,
+            DiskInodeType::Directory => 2,
+        }
+    }
 }
 /// A directory entry
 #[repr(C)]
 pub struct DirEntry {
-    name: [u8; NAME_LENGTH_LIMIT + 1],
-    inode_id: u32,
+    pub(crate) name: [u8; NAME_LENGTH_LIMIT + 1],
+    pub(crate) inode_id: u32,
 }
 /// Size of a directory entry
 pub const DIRENT_SZ: usize = 32;
