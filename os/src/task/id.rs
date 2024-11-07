@@ -128,11 +128,11 @@ impl KernelStack {
 
 /// User Resource for a task
 pub struct TaskUserRes {
-    /// task id
+    /// task id 线程标识符
     pub tid: usize,
-    /// user stack base
+    /// user stack base 线程的栈顶地址
     pub ustack_base: usize,
-    /// process belongs to
+    /// process belongs to 
     pub process: Weak<ProcessControlBlock>,
 }
 /// Return the bottom addr (low addr) of the trap context for a task

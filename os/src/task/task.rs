@@ -6,15 +6,17 @@ use crate::trap::TrapContext;
 use crate::{mm::PhysPageNum, sync::UPSafeCell};
 use alloc::sync::{Arc, Weak};
 use core::cell::RefMut;
+use alloc::vec::Vec;
+use alloc::vec;
 
 /// Task control block structure
 pub struct TaskControlBlock {
     /// immutable
-    pub process: Weak<ProcessControlBlock>,
+    pub process: Weak<ProcessControlBlock>,     //线程所属的进程控制块
     /// Kernel stack corresponding to PID
-    pub kstack: KernelStack,
+    pub kstack: KernelStack,        //任务（线程）的内核栈
     /// mutable
-    inner: UPSafeCell<TaskControlBlockInner>,
+    inner: UPSafeCell<TaskControlBlockInner>,   //运行过程中可能发生变化的元数据
 }
 
 impl TaskControlBlock {
@@ -31,16 +33,24 @@ impl TaskControlBlock {
 }
 
 pub struct TaskControlBlockInner {
-    pub res: Option<TaskUserRes>,
+    pub res: Option<TaskUserRes>,//任务（线程）用户态资源
     /// The physical page number of the frame where the trap context is placed
-    pub trap_cx_ppn: PhysPageNum,
+    pub trap_cx_ppn: PhysPageNum,//trap上下文地址
     /// Save task context
-    pub task_cx: TaskContext,
+    pub task_cx: TaskContext,//任务（线程）上下文
 
     /// Maintain the execution status of the current process
-    pub task_status: TaskStatus,
+    pub task_status: TaskStatus,//任务（线程）状态
     /// It is set when active exit or execution error occurs
-    pub exit_code: Option<i32>,
+    pub exit_code: Option<i32>,//任务（线程）退出码
+    /// m_allocation  当前已分配的互斥量（mutex）资源数量
+    pub m_allocation: Vec<usize>,
+    /// s_allocation  已分配的信号量（semaphore）资源数量
+    pub s_allocation: Vec<usize>,
+    /// m_need  所需的互斥量资源数量
+    pub m_need: Vec<usize>,
+    /// s_need  所需的信号量资源数量
+    pub s_need: Vec<usize>,
 }
 
 impl TaskControlBlockInner {
@@ -51,6 +61,42 @@ impl TaskControlBlockInner {
     #[allow(unused)]
     fn get_status(&self) -> TaskStatus {
         self.task_status
+    }
+
+    /// increase.m_allocation
+    pub fn adjust_m_allocation(&mut self, target_id: usize, num: usize) {
+        let desired_length = target_id + 1; // 指定的长度
+        if self.m_allocation.len() < desired_length {
+            self.m_allocation.resize(desired_length, 0);
+        }
+        self.m_allocation[target_id] += num;
+    }
+
+    /// increase.s_allocation
+    pub fn adjust_s_allocation(&mut self, target_id: usize, num: usize) {
+        let desired_length = target_id + 1; // 指定的长度
+        if self.s_allocation.len() < desired_length {
+            self.s_allocation.resize(desired_length, 0);
+        }
+        self.s_allocation[target_id] += num;
+    }
+
+    /// increase.m_need
+    pub fn adjust_m_need(&mut self, target_id: usize, num: usize) {
+        let desired_length = target_id + 1; // 指定的长度
+        if self.m_need.len() < desired_length {
+            self.m_need.resize(desired_length, 0);
+        }
+        self.m_need[target_id] += num;
+    }
+
+    /// increase.s_need
+    pub fn adjust_s_need(&mut self, target_id: usize, num: usize) {
+        let desired_length = target_id + 1; // 指定的长度
+        if self.s_need.len() < desired_length {
+            self.s_need.resize(desired_length, 0);
+        }
+        self.s_need[target_id] += num;
     }
 }
 
@@ -65,6 +111,8 @@ impl TaskControlBlock {
         let trap_cx_ppn = res.trap_cx_ppn();
         let kstack = kstack_alloc();
         let kstack_top = kstack.get_top();
+
+        let process_inner = process.inner_exclusive_access();
         Self {
             process: Arc::downgrade(&process),
             kstack,
@@ -75,6 +123,10 @@ impl TaskControlBlock {
                     task_cx: TaskContext::goto_trap_return(kstack_top),
                     task_status: TaskStatus::Ready,
                     exit_code: None,
+                    m_allocation: vec![0;process_inner.mutex_list.len()],
+                    s_allocation: vec![0;process_inner.semaphore_list.len()],
+                    m_need: vec![0;process_inner.mutex_list.len()],
+                    s_need: vec![0;process_inner.semaphore_list.len()],
                 })
             },
         }

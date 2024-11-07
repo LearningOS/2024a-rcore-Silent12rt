@@ -18,7 +18,7 @@ use core::cell::RefMut;
 /// Process Control Block
 pub struct ProcessControlBlock {
     /// immutable
-    pub pid: PidHandle,
+    pub pid: PidHandle,//进程ID
     /// mutable
     inner: UPSafeCell<ProcessControlBlockInner>,
 }
@@ -40,7 +40,7 @@ pub struct ProcessControlBlockInner {
     /// signal flags
     pub signals: SignalFlags,
     /// tasks(also known as threads)
-    pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
+    pub tasks: Vec<Option<Arc<TaskControlBlock>>>,//线程控制块列表
     /// task resource allocator
     pub task_res_allocator: RecycleAllocator,
     /// mutex list
@@ -49,6 +49,12 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// m_available
+    pub m_available: Vec<usize>,
+    /// s_available
+    pub s_available: Vec<usize>,
+    /// deadlock detection
+    pub dead_lock_enable:bool,
 }
 
 impl ProcessControlBlockInner {
@@ -82,6 +88,87 @@ impl ProcessControlBlockInner {
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
     }
+
+    /// 检测死锁的函数
+    pub fn detect_deadlock(&self, is_semaphore: bool) -> bool {
+        let mut work = if is_semaphore {
+            self.s_available.clone()
+        } else {
+            self.m_available.clone()
+        };
+
+        let task_len = self.tasks.len();
+        let mut finish = vec![false; task_len];
+
+        loop {
+            let mut found = false;
+
+            for task_id in 0..task_len {
+                if finish[task_id] {
+                    continue;
+                }
+
+                let task = self.get_task(task_id);
+                let mut task_inner = task.inner_exclusive_access();
+
+                // If any resource's need exceeds the remaining, 'can_proceed' will be false
+                let can_proceed = if is_semaphore {
+                    !work.iter().enumerate().any(|(sem_id, &sem_remain)| {
+                        task_inner.adjust_s_need(sem_id, 0);
+                        task_inner.s_need[sem_id] > sem_remain
+                    })
+                } else {
+                    !work.iter().enumerate().any(|(mutex_id, &mutex_remain)| {
+                        task_inner.adjust_m_need(mutex_id, 0);
+                        task_inner.m_need[mutex_id] > mutex_remain
+                    })
+                };
+
+                if can_proceed {
+                    finish[task_id] = true;
+                    work.iter_mut().enumerate().for_each(|(pos, ptr)| {
+                        if is_semaphore {
+                            task_inner.adjust_s_allocation(pos, 0);
+                        } else {
+                            task_inner.adjust_m_allocation(pos, 0);
+                        }
+                        *ptr += if is_semaphore {
+                            task_inner.s_allocation[pos]
+                        } else {
+                            task_inner.m_allocation[pos]
+                        };
+                    });
+                    found = true;
+                }
+            }
+
+            if !found {
+                break;
+            }
+        }
+
+        // If any task is not finished, a deadlock has occurred
+        !finish.iter().all(|&x| x)
+    }
+
+    /// increase m_available
+    pub fn adjust_m_available(&mut self, target_id: usize, num: usize) {
+        let desired_length = target_id + 1; // 指定的长度
+        if self.m_available.len() < desired_length {
+            self.m_available.resize(desired_length, 0);
+        }
+        self.m_available[target_id] += num;
+    }
+
+    /// increase allocation
+    pub fn adjust_s_available(&mut self, target_id: usize, num: usize) {
+        let desired_length = target_id + 1; // 指定的长度
+        if self.s_available.len() < desired_length {
+            self.s_available.resize(desired_length, 0);
+        }
+        self.s_available[target_id] += num;
+    }
+
 }
 
 impl ProcessControlBlock {
@@ -119,6 +206,10 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    // 新增
+                    s_available:Vec::new(),
+                    m_available:Vec::new(),
+                    dead_lock_enable:false,
                 })
             },
         });
@@ -245,6 +336,11 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+
+                    // 新增
+                    m_available:parent.m_available.clone(),
+                    s_available:parent.m_available.clone(),
+                    dead_lock_enable:parent.dead_lock_enable,
                 })
             },
         });
